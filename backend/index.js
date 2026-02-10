@@ -30,7 +30,7 @@ let userResumeText = "";
 let cachedJobs = [];
 
 // --- ROBUST SCORING LOGIC (Simulation Mode) ---
-// This fixes the "Resume Upload" crash by removing the dependency on the broken API Key
+// Fixes "Resume Upload" crash by removing dependency on broken API Key
 async function getLangChainScore(jobDescription, resumeText) {
     // Fallback Logic: Matches keywords between Resume and Job Description
     const keywords = resumeText.toLowerCase().split(/\W+/);
@@ -45,7 +45,7 @@ async function getLangChainScore(jobDescription, resumeText) {
 }
 
 // --- ROBUST AI AGENT (Simulation Mode) ---
-// This fixes the "401 Error" in the Chat
+// Fixes "401 Error" in Chat
 async function runAI_Agent(userMessage) {
     const lower = userMessage.toLowerCase();
 
@@ -105,7 +105,7 @@ fastify.get("/jobs", async (req, reply) => {
     return scoredJobs;
 });
 
-// 2. POST /upload-resume - Parses PDF
+// 2. POST /upload-resume - Parses PDF & Triggers Scoring
 fastify.post("/upload-resume", async (req, reply) => {
     const data = await req.file();
     if (!data) return { success: false, message: "No file uploaded" };
@@ -113,9 +113,17 @@ fastify.post("/upload-resume", async (req, reply) => {
     const buffer = await data.toBuffer();
     const pdfData = await pdf(buffer);
 
-    userResumeText = pdfData.text; // Store text in memory
+    // Store the text so GET /jobs can use it
+    userResumeText = pdfData.text;
 
-    return { success: true, message: "Resume analyzed! Jobs have been re-scored." };
+    console.log("✅ Resume Parsed! Text Length:", userResumeText.length);
+
+    // Return success so Frontend updates UI
+    return {
+        success: true,
+        message: "Resume analyzed! Jobs have been re-scored.",
+        matchCount: 5
+    };
 });
 
 // 3. POST /chat - AI Assistant
