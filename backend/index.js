@@ -2,32 +2,32 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import axios from "axios";
-// FIX START: Old library compatibility
+import dotenv from "dotenv";
+
+// FIX for "pdf-parse" (Old library compatibility)
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const pdf = require("pdf-parse");
-// FIX END
-import dotenv from "dotenv";
 
 dotenv.config();
 
 const fastify = Fastify({ logger: true });
-// ... rest of your code ...
 
 // --- PLUGINS ---
 await fastify.register(cors, { origin: "*" });
 await fastify.register(multipart);
 
 // --- CONFIGURATION ---
+// ⚠️ Ensure you have pasted your real keys here
 const ADZUNA_APP_ID = "bfd57d84";
 const ADZUNA_APP_KEY = "9a0fca582760a1599cb30f608ebc9029";
 const COUNTRY = "in"; // India
 
 // --- IN-MEMORY STORAGE ---
 let userResumeText = ""; // Stores the parsed resume text
-let cachedJobs = [];     // Stores fetched jobs to avoid hitting API limits
+let cachedJobs = [];     // Stores fetched jobs
 
-// --- HELPER: Simple Keyword Matcher ---
+// --- HELPER: Keyword Matcher ---
 function calculateMatchScore(jobDescription, resumeText) {
     if (!resumeText) return null;
 
@@ -49,9 +49,10 @@ function calculateMatchScore(jobDescription, resumeText) {
 
 // --- ROUTES ---
 
-// 1. GET /jobs - Fetches Real Adzuna Jobs
+// 1. GET /jobs - Real Data + Match Scoring
 fastify.get("/jobs", async (req, reply) => {
     try {
+        // Fetch fresh jobs if cache is empty
         if (cachedJobs.length === 0) {
             console.log("Fetching fresh jobs from Adzuna...");
             const response = await axios.get(
@@ -62,7 +63,7 @@ fastify.get("/jobs", async (req, reply) => {
                         app_key: ADZUNA_APP_KEY,
                         results_per_page: 20,
                         what: "Software Developer",
-                        "content-type": "application/json", // <--- FIXED: Added quotes
+                        "content-type": "application/json",
                     },
                 }
             );
@@ -78,6 +79,7 @@ fastify.get("/jobs", async (req, reply) => {
             }));
         }
 
+        // Apply Scoring
         const scoredJobs = cachedJobs.map(job => ({
             ...job,
             matchScore: userResumeText
@@ -85,6 +87,7 @@ fastify.get("/jobs", async (req, reply) => {
                 : null
         }));
 
+        // Sort by Score
         if (userResumeText) {
             scoredJobs.sort((a, b) => b.matchScore - a.matchScore);
         }
@@ -93,13 +96,14 @@ fastify.get("/jobs", async (req, reply) => {
 
     } catch (err) {
         fastify.log.error(err);
+        // Fallback Data
         return [
             { id: 999, title: "Backend Engineer (Fallback)", company: "Tech Backup", location: "Remote", description: "Node.js and Fastify expert.", matchScore: 85 }
         ];
     }
 });
 
-// 2. POST /upload-resume - Parses PDF
+// 2. POST /upload-resume - PDF Parsing
 fastify.post("/upload-resume", async (req, reply) => {
     const data = await req.file();
     if (!data) return reply.status(400).send({ error: "No file uploaded" });
@@ -122,12 +126,47 @@ fastify.post("/upload-resume", async (req, reply) => {
     }
 });
 
-// 3. POST /chat - Simple Chatbot
+// 3. POST /chat - AI Assistant Logic
 fastify.post("/chat", async (req, reply) => {
     const { message } = req.body;
+    if (!message) return { success: false, message: "Say something!" };
+
+    const userText = message.toLowerCase();
+
+    // Logic A: Filter for "Remote"
+    if (userText.includes("remote") || userText.includes("wfh") || userText.includes("home")) {
+        return {
+            success: true,
+            message: "I've filtered the feed to show only Remote/Work-from-Home opportunities.",
+            action: { type: "FILTER", keyword: "remote" }
+        };
+    }
+
+    // Logic B: Filter for specific Tech Stacks
+    const techStack = ["java", "python", "react", "node", "sql", "aws", "docker"];
+    const foundTech = techStack.find(tech => userText.includes(tech));
+
+    if (foundTech) {
+        return {
+            success: true,
+            message: `Searching specifically for ${foundTech.toUpperCase()} roles.`,
+            action: { type: "FILTER", keyword: foundTech }
+        };
+    }
+
+    // Logic C: Resume Help
+    if (userText.includes("resume")) {
+        if (userResumeText) {
+            return { success: true, message: "I have your resume! I'm already using it to score the jobs." };
+        } else {
+            return { success: true, message: "I don't have your resume yet. Please upload it so I can help you find a better match." };
+        }
+    }
+
+    // Default Reply
     return {
         success: true,
-        message: "I am currently optimizing your job feed based on the resume you uploaded. (AI Chat Coming Soon)"
+        message: "I can help you filter jobs. Try saying 'Show me Remote jobs' or 'Find Python roles'."
     };
 });
 
