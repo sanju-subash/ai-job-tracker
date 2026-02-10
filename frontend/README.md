@@ -1,49 +1,38 @@
-# AI-Powered Job Tracker with Smart Matching
+# AI-Powered Job Tracker
 
-This project is a full-stack web application that helps users track job applications and view AI-based job–resume match scores. It was built as part of an internship evaluation assignment.
+A smart job tracking dashboard featuring an **AI Assistant** that can filter jobs via natural language, automatic **Resume Parsing**, and intelligent **Match Scoring**.
 
----
+![AI Job Tracker Dashboard](https://via.placeholder.com/800x400.png?text=AI+Job+Tracker+Dashboard)
 
-## 🚀 Features
+## 🚀 Key Features
+1.  **AI-Powered Job Matching**: Upload a PDF resume, and the system automatically scores jobs (0-100%) based on skill relevance.
+2.  **Conversational AI Assistant**:
+    * *User:* "Show me Remote jobs"
+    * *AI:* Automatically updates the UI filters to show only Remote roles.
+3.  **Smart Application Tracking**: Tracks application history locally and prevents duplicate applications.
+4.  **Modern UI**: Glassmorphism design with responsive grid layouts.
 
-- Job listings dashboard
-- AI-generated match score for each job
-- Resume–job matching using LangChain + OpenAI
-- Apply button with confirmation flow
-- Applied jobs tracking
-- Persistent state using localStorage
-- Clean frontend–backend separation
+## 🛠 Tech Stack
+- **Frontend:** React + Vite
+- **Backend:** Node.js + Fastify
+- **AI Integration:** OpenAI (GPT-3.5) / Simulation Mode
+- **Styling:** CSS3 (Glassmorphism)
 
----
+## 🏗 Architecture
 
-## 🧱 Tech Stack
+[User] -> [React Frontend]
+             |
+             v
+      [Fastify Backend]
+       /           \
+[Resume Parser]   [AI Logic Module]
+(pdf-parse)       (Intent Detection)
+       |               |
+[Text Extraction] [Filter Action JSON]
 
-### Frontend
-- React (Vite)
-- JavaScript
-- Browser localStorage
+## 🔧 Setup Instructions
 
-### Backend
-- Node.js
-- Fastify
-- LangChain
-- OpenAI API
-
----
-
-## 🧠 AI Matching Logic
-
-- Resume text is provided (hardcoded for demo purposes)
-- Job descriptions are compared against resume content
-- LangChain with OpenAI generates a match score (0–100)
-- The score is returned via backend API and displayed in UI
-
-This approach demonstrates AI orchestration and integration rather than perfect accuracy.
-
----
-
-## 📁 Project Structure
-
-ai-job-tracker/
-├── frontend/     # React frontend
-└── backend/      # Fastify backend with AI logic
+### 1. Clone & Install
+```bash
+git clone [https://github.com/YOUR_USERNAME/ai-job-tracker.git](https://github.com/YOUR_USERNAME/ai-job-tracker.git)
+cd ai-job-tracker
