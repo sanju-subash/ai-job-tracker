@@ -24,7 +24,7 @@ function App() {
   // --- EFFECTS ---
   useEffect(() => {
     // Replace with your Render URL when deploying!
-    fetch("http://localhost:3001/jobs")
+    fetch("https://ai-job-tracker-1-4sk5.onrender.com/jobs")
       .then((res) => res.json())
       .then((data) => setJobs(data))
       .catch((err) => console.error("Error fetching jobs:", err));
@@ -45,7 +45,7 @@ function App() {
 
     try {
       // Replace with your Render URL when deploying!
-      const response = await fetch("http://localhost:3001/upload-resume", {
+      const response = await fetch("https://ai-job-tracker-1-4sk5.onrender.com/upload-resume", {
         method: "POST",
         body: formData,
       });
@@ -95,7 +95,7 @@ function App() {
 
     try {
       // Replace with your Render URL when deploying!
-      const res = await fetch("http://localhost:3001/chat", {
+      const res = await fetch("https://ai-job-tracker-1-4sk5.onrender.com/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMsg }),
