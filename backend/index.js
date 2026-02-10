@@ -77,10 +77,14 @@ fastify.post("/chat", async (req, reply) => {
 });
 
 // --- START SERVER ---
-try {
-    await fastify.listen({ port: 3001 });
-    console.log("Server running on http://localhost:3001");
-} catch (err) {
-    fastify.log.error(err);
-    process.exit(1);
-}
+const start = async () => {
+    try {
+        const port = process.env.PORT || 3001;
+        await fastify.listen({ port: port, host: "0.0.0.0" }); // host: "0.0.0.0" is CRITICAL for Render
+        console.log(`Server running on http://0.0.0.0:${port}`);
+    } catch (err) {
+        fastify.log.error(err);
+        process.exit(1);
+    }
+};
+start();
