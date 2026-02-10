@@ -1,0 +1,21 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@langchain/openai": "^1.2.6",
+    "dotenv": "^17.2.4",
+    "fastify": "^5.7.4",
+    "langchain": "^1.2.19",
+    "openai": "^6.19.0"
+  }
+}
