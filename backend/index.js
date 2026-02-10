@@ -30,7 +30,7 @@ let userResumeText = "";
 let cachedJobs = [];
 
 // --- ROBUST SCORING LOGIC (Simulation Mode) ---
-// Fixes "Resume Upload" crash by removing dependency on broken API Key
+// This fixes the "Resume Upload" crash by removing the dependency on the broken API Key
 async function getLangChainScore(jobDescription, resumeText) {
     // Fallback Logic: Matches keywords between Resume and Job Description
     const keywords = resumeText.toLowerCase().split(/\W+/);
@@ -45,7 +45,7 @@ async function getLangChainScore(jobDescription, resumeText) {
 }
 
 // --- ROBUST AI AGENT (Simulation Mode) ---
-// Fixes "401 Error" in Chat
+// This fixes the "401 Error" in the Chat
 async function runAI_Agent(userMessage) {
     const lower = userMessage.toLowerCase();
 
@@ -105,7 +105,7 @@ fastify.get("/jobs", async (req, reply) => {
     return scoredJobs;
 });
 
-// 2. POST /upload-resume - Parses PDF & Triggers Scoring
+// 2. POST /upload-resume - Parses PDF & Return Proper JSON
 fastify.post("/upload-resume", async (req, reply) => {
     const data = await req.file();
     if (!data) return { success: false, message: "No file uploaded" };
@@ -113,12 +113,9 @@ fastify.post("/upload-resume", async (req, reply) => {
     const buffer = await data.toBuffer();
     const pdfData = await pdf(buffer);
 
-    // Store the text so GET /jobs can use it
-    userResumeText = pdfData.text;
+    userResumeText = pdfData.text; // Store text in memory
 
-    console.log("✅ Resume Parsed! Text Length:", userResumeText.length);
-
-    // Return success so Frontend updates UI
+    // CRITICAL: Return 'success: true' so the Frontend knows to refresh
     return {
         success: true,
         message: "Resume analyzed! Jobs have been re-scored.",
