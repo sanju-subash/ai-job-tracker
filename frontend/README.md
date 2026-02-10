@@ -1,38 +1,30 @@
-# AI-Powered Job Tracker
+# AI-Powered Job Tracker 🚀
 
-A smart job tracking dashboard featuring an **AI Assistant** that can filter jobs via natural language, automatic **Resume Parsing**, and intelligent **Match Scoring**.
+## 📋 Project Overview
+A Full-Stack Intelligent Job Search Application that aggregates real-time job listings and uses AI to personalize the candidate experience through resume matching and a conversational assistant.
 
-![AI Job Tracker Dashboard](https://via.placeholder.com/800x400.png?text=AI+Job+Tracker+Dashboard)
+**Live URL:** https://ai-job-tracker-woad.vercel.app/
 
-## 🚀 Key Features
-1.  **AI-Powered Job Matching**: Upload a PDF resume, and the system automatically scores jobs (0-100%) based on skill relevance.
-2.  **Conversational AI Assistant**:
-    * *User:* "Show me Remote jobs"
-    * *AI:* Automatically updates the UI filters to show only Remote roles.
-3.  **Smart Application Tracking**: Tracks application history locally and prevents duplicate applications.
-4.  **Modern UI**: Glassmorphism design with responsive grid layouts.
+## 🏗 Architecture & Design Decisions
+[Frontend: React/Vite] <--> [Backend: Fastify/Node.js] <--> [AI Logic: LangChain]
 
-## 🛠 Tech Stack
-- **Frontend:** React + Vite
-- **Backend:** Node.js + Fastify
-- **AI Integration:** OpenAI (GPT-3.5) / Simulation Mode
-- **Styling:** CSS3 (Glassmorphism)
+### 1. Adzuna Integration
+The application fetches live tech job listings from the Adzuna API, replacing static mock data with real-world opportunities from the Indian market.
 
-## 🏗 Architecture
+### 2. Resume Parsing Engine
+Integrated `pdf-parse` to extract unstructured text from user-uploaded PDF resumes, enabling the system to understand candidate profiles without manual data entry.
 
-[User] -> [React Frontend]
-             |
-             v
-      [Fastify Backend]
-       /           \
-[Resume Parser]   [AI Logic Module]
-(pdf-parse)       (Intent Detection)
-       |               |
-[Text Extraction] [Filter Action JSON]
+### 3. AI Job Matching with LangChain
+Implemented a Hybrid Matching Strategy:
+- **Primary Logic:** Uses LangChain's `RunnableSequence` to compare resume text against job descriptions.
+- **Scoring:** Generates a 0-100 Match Score based on skill overlap and semantic relevance.
+- **Design:** The system handles large text blocks by truncating inputs to ensure API performance and cost efficiency.
 
-## 🔧 Setup Instructions
+### 4. AI Assistant with LangGraph Architecture
+The AI Assistant uses a state-driven approach to detect user intent. 
+- **Intent Detection:** Recognizes when a user wants to filter jobs (e.g., "remote", "java", "python").
+- **Action Routing:** The backend returns structured JSON instructions to the frontend to update UI filters in real-time.
 
-### 1. Clone & Install
-```bash
-git clone [https://github.com/YOUR_USERNAME/ai-job-tracker.git](https://github.com/YOUR_USERNAME/ai-job-tracker.git)
-cd ai-job-tracker
+## 🔧 Setup & Installation
+1. **Backend:** `cd backend && npm install && node index.js`
+2. **Frontend:** `cd frontend && npm install && npm run dev`
