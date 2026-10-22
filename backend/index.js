@@ -32,20 +32,36 @@ function jobShape(job, queryLabel) {
   const company = job.company?.display_name || "Company not listed";
   const location = job.location?.display_name || "Not specified";
   const description = job.description || "";
+  const titleLower = title.toLowerCase();
   const text = (title + " " + description).toLowerCase();
-  const skills = ["python", "fastapi", "flask", "mongodb", "postgresql", "react", "n8n", "vapi", "gemini", "webhook", "api integration"];
+  const skills = ["python", "fastapi", "flask", "mongodb", "postgresql", "react", "n8n", "vapi", "gemini", "webhook", "api integration", "sql", "rest api", "machine learning"];
   const matchedSkills = skills.filter(skill => text.includes(skill));
   const resumeTerms = resumeText.toLowerCase().split(/[^a-z0-9+#.]+/).filter(term => term.length >= 4);
   const resumeMatches = [...new Set(resumeTerms)].filter(term => text.includes(term)).slice(0, 12);
-  const titleTerms = ["python", "backend", "software engineer", "software developer", "ai engineer", "automation", "integration"];
-  const roleHits = titleTerms.filter(term => title.toLowerCase().includes(term));
-  let score = Math.min(30, matchedSkills.length * 5) + Math.min(35, roleHits.length * 12) + Math.min(20, resumeMatches.length * 2);
-  if (/junior|entry.level|graduate|fresher|associate|trainee|early career|0.?1 year/.test(text)) score += 15;
-  if (/remote|work from home|wfh/.test((location + " " + description).toLowerCase())) score += 10;
-  if (/senior|staff engineer|principal|lead engineer|manager|director|5\+ years|7\+ years/.test((title + " " + description.slice(0, 1000)).toLowerCase())) score -= 25;
+  const roleGroups = [
+    { label: "Python/backend", re: /python|backend|back.end|fastapi|flask|api developer/ },
+    { label: "Software engineering", re: /software engineer|software developer|application developer|full.stack|web developer/ },
+    { label: "AI/ML integration", re: /ai engineer|machine learning|ml engineer|llm|generative ai|ai integration/ },
+    { label: "Automation/integration", re: /automation engineer|integration engineer|workflow automation|rpa developer/ },
+    { label: "Data", re: /data analyst|junior data scientist|data engineer/ },
+  ];
+  const roleHits = roleGroups.filter(group => group.re.test(titleLower));
+  const earlyCareer = /junior|entry.level|graduate|fresher|associate|trainee|early career|intern|new grad|0.?1 year|1.?2 years/.test(text);
+  const seniorRole = /\\b(senior|sr\\.?|staff|principal|lead|manager|director|architect|head of)\\b/.test(titleLower)
+    || /\\b(5\\+|6\\+|7\\+|8\\+|10\\+)\\s*years?/.test(text);
+  const targetRole = roleHits.length > 0;
+  const remote = /remote|work from home|\\bwfh\\b/.test((location + " " + description).toLowerCase());
+  let score = (targetRole ? 25 : 0)
+    + Math.min(30, matchedSkills.length * 5)
+    + Math.min(20, resumeMatches.length * 2)
+    + (earlyCareer ? 20 : 0)
+    + (remote ? 5 : 0);
+  if (seniorRole) score -= 45;
+  if (!targetRole) score -= 25;
   return {
     id: String(job.id || job.redirect_url || title + company), title, company, location, description,
     url: job.redirect_url || job.url || "", posted: job.created || null, source: "Adzuna", sourceQuery: queryLabel,
+    targetRole, roleCategories: roleHits.map(group => group.label), earlyCareer, seniorRole, remote,
     matchScore: Math.max(0, Math.min(100, score)), matchedSkills, resumeMatches,
     salaryMin: job.salary_min || null, salaryMax: job.salary_max || null,
     salaryNote: job.salary_min || job.salary_max ? "Verify salary amount and pay period on employer page." : "Salary not disclosed; confirm the role fits your ₹5–8 LPA target.",
@@ -66,11 +82,12 @@ app.get("/jobs", async (request, reply) => {
   const appKey = process.env.ADZUNA_APP_KEY;
   if (!appId || !appKey) return reply.code(503).send({ error: "Job search is not configured. Add ADZUNA_APP_ID and ADZUNA_APP_KEY to backend environment variables. No sample jobs are returned." });
   const queries = [
-    ["Python backend developer junior", "Bangalore", "Bengaluru Python/backend"],
-    ["software engineer graduate entry level", "Bangalore", "Bengaluru early-career software"],
-    ["AI integration automation engineer", "Bangalore", "Bengaluru AI/automation"],
-    ["remote Python backend developer", "India", "Remote Python/backend"],
-    ["remote AI automation integration engineer", "India", "Remote AI/automation"],
+    ["junior python developer fresher", "Bengaluru", "Bengaluru junior Python"],
+    ["entry level backend developer graduate", "Bengaluru", "Bengaluru entry-level backend"],
+    ["graduate software engineer trainee", "Bengaluru", "Bengaluru graduate software"],
+    ["junior AI automation integration engineer", "Bengaluru", "Bengaluru junior AI/automation"],
+    ["remote junior python developer fresher", "India", "Remote junior Python"],
+    ["remote entry level software engineer", "India", "Remote entry-level software"],
   ];
   const results = await Promise.allSettled(queries.map(async ([what, where, label]) => {
     const response = await axios.get("https://api.adzuna.com/v1/api/jobs/in/search/1", {
@@ -79,8 +96,10 @@ app.get("/jobs", async (request, reply) => {
     });
     return (response.data.results || []).map(job => jobShape(job, label));
   }));
-  const found = results.filter(r => r.status === "fulfilled").flatMap(r => r.value);
-  if (!found.length) return reply.code(502).send({ error: "Job provider did not return results. Check credentials or retry later." });
+  const providerJobs = results.filter(r => r.status === "fulfilled").flatMap(r => r.value);
+  if (!providerJobs.length) return reply.code(502).send({ error: "Job provider did not return results. Check credentials or retry later." });
+  const found = providerJobs.filter(job => job.targetRole && !job.seniorRole);
+  if (!found.length) return { jobs: [], total: 0, dailyTarget: 15, note: "No clearly relevant early-career target roles were found in this provider batch. Try again later; senior/leadership and unrelated roles are intentionally excluded." };
   const unique = [];
   const seen = new Set();
   for (const job of found) {
@@ -89,7 +108,7 @@ app.get("/jobs", async (request, reply) => {
     seen.add(key); unique.push(job);
   }
   unique.sort((a, b) => b.matchScore - a.matchScore || String(b.posted || "").localeCompare(String(a.posted || "")));
-  return { jobs: unique, total: unique.length, dailyTarget: 15, note: "Match scores are keyword heuristics, not guarantees. Verify seniority, location and compensation on the employer page." };
+  return { jobs: unique, total: unique.length, dailyTarget: 15, note: "Only target-role titles without clear senior/leadership signals are shown. Scores are keyword heuristics, not guarantees; verify seniority, location and compensation on the employer page." };
 });
 
 app.post("/upload-resume", async (request, reply) => {
