@@ -96,8 +96,27 @@ app.get("/jobs", async (request, reply) => {
     });
     return (response.data.results || []).map(job => jobShape(job, label));
   }));
-  const providerJobs = results.filter(r => r.status === "fulfilled").flatMap(r => r.value);
-  if (!providerJobs.length) return reply.code(502).send({ error: "Job provider did not return results. Check credentials or retry later." });
+  const failed = results.filter(r => r.status === "rejected");
+  for (const result of failed) {
+    const error = result.reason;
+    request.log.warn({
+      provider: "Adzuna",
+      status: error?.response?.status || null,
+      code: error?.code || null,
+      message: error?.response?.data?.exception || error?.response?.data?.error || error?.message || "Unknown provider error",
+    }, "Adzuna search request failed");
+  }
+  const successful = results.filter(r => r.status === "fulfilled");
+  const providerJobs = successful.flatMap(r => r.value);
+  if (!successful.length) {
+    return reply.code(502).send({
+      error: "All job-provider requests failed. Check the Adzuna credentials and API quota in Render logs.",
+      failedRequests: failed.length,
+    });
+  }
+  if (!providerJobs.length) {
+    return { jobs: [], total: 0, dailyTarget: 15, note: "Adzuna responded successfully but returned no listings for these searches. Retry later or broaden the search." };
+  }
   const found = providerJobs.filter(job => job.targetRole && !job.seniorRole);
   if (!found.length) return { jobs: [], total: 0, dailyTarget: 15, note: "No clearly relevant early-career target roles were found in this provider batch. Try again later; senior/leadership and unrelated roles are intentionally excluded." };
   const unique = [];
