@@ -47,10 +47,10 @@ function jobShape(job, queryLabel) {
   ];
   const roleHits = roleGroups.filter(group => group.re.test(titleLower));
   const earlyCareer = /junior|entry.level|graduate|fresher|associate|trainee|early career|intern|new grad|0.?1 year|1.?2 years/.test(text);
-  const seniorRole = /\\b(senior|sr\\.?|staff|principal|lead|manager|director|architect|head of)\\b/.test(titleLower)
-    || /\\b(5\\+|6\\+|7\\+|8\\+|10\\+)\\s*years?/.test(text);
+  const seniorRole = /\b(senior|sr\.?|staff|principal|lead|manager|director|architect|head of)\b/.test(titleLower)
+    || /\b(5\+|6\+|7\+|8\+|10\+)\s*years?/.test(text);
   const targetRole = roleHits.length > 0;
-  const remote = /remote|work from home|\\bwfh\\b/.test((location + " " + description).toLowerCase());
+  const remote = /remote|work from home|\bwfh\b/.test((location + " " + description).toLowerCase());
   let score = (targetRole ? 25 : 0)
     + Math.min(30, matchedSkills.length * 5)
     + Math.min(20, resumeMatches.length * 2)
