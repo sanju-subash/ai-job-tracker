@@ -3,139 +3,155 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import axios from "axios";
 import dotenv from "dotenv";
-import { createRequire } from "module";
-
-// --- LANGCHAIN IMPORTS (Kept for Assignment Compliance) ---
-import { ChatOpenAI } from "@langchain/openai";
-import { PromptTemplate } from "@langchain/core/prompts";
-import { StringOutputParser } from "@langchain/core/output_parsers";
-import { RunnableSequence } from "@langchain/core/runnables";
-
-const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
+import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
+import { createApplicationStore } from "./application-store.js";
+import { duplicateExists, validateStatus } from "./workflow-helpers.js";
+import { prepareAnswer } from "./application-answers.js";
 
 dotenv.config();
-const fastify = Fastify({ logger: true });
+const require = createRequire(import.meta.url);
+const pdf = require("pdf-parse");
+const app = Fastify({ logger: true });
+const store = createApplicationStore();
+const statuses = ["saved", "ready_for_review", "applied", "assessment", "interview", "rejected", "offer", "withdrawn", "follow_up"];
 
-// --- PLUGINS ---
-await fastify.register(cors, { origin: "*" });
-await fastify.register(multipart);
+await app.register(cors, {
+  origin: process.env.ALLOWED_ORIGIN ? process.env.ALLOWED_ORIGIN.split(",").map(s => s.trim()) : true,
+});
+await app.register(multipart, { limits: { fileSize: 8 * 1024 * 1024 } });
 
-// --- CONFIGURATION ---
-const ADZUNA_APP_ID = "bfd57d84";
-const ADZUNA_APP_KEY = "9a0fca582760a1599cb30f608ebc9029";
-
-// --- IN-MEMORY STORAGE ---
-let userResumeText = "";
-let cachedJobs = [];
-
-// --- ROBUST SCORING LOGIC (Simulation Mode) ---
-// This fixes the "Resume Upload" crash by removing the dependency on the broken API Key
-async function getLangChainScore(jobDescription, resumeText) {
-    // Fallback Logic: Matches keywords between Resume and Job Description
-    const keywords = resumeText.toLowerCase().split(/\W+/);
-    const jobWords = jobDescription.toLowerCase();
-
-    // Count matches for technical words (length > 3)
-    const matches = keywords.filter(w => w.length > 3 && jobWords.includes(w)).length;
-
-    // Generate a realistic score (Base 60 + Bonus for matches)
-    let score = 60 + Math.min(Math.round((matches / 15) * 40), 35);
-    return score;
+function jobShape(job, queryLabel) {
+  const title = job.title || "Untitled role";
+  const company = job.company?.display_name || "Company not listed";
+  const location = job.location?.display_name || "Not specified";
+  const description = job.description || "";
+  const text = (title + " " + description).toLowerCase();
+  const skills = ["python", "fastapi", "flask", "mongodb", "postgresql", "react", "n8n", "vapi", "gemini", "webhook", "api integration"];
+  const matchedSkills = skills.filter(skill => text.includes(skill));
+  const titleTerms = ["python", "backend", "software engineer", "software developer", "ai engineer", "automation", "integration"];
+  const roleHits = titleTerms.filter(term => title.toLowerCase().includes(term));
+  let score = Math.min(40, matchedSkills.length * 6) + Math.min(35, roleHits.length * 12);
+  if (/junior|entry.level|graduate|fresher|associate|trainee|early career|0.?1 year/.test(text)) score += 15;
+  if (/remote|work from home|wfh/.test((location + " " + description).toLowerCase())) score += 10;
+  if (/senior|staff engineer|principal|lead engineer|manager|director|5\+ years|7\+ years/.test((title + " " + description.slice(0, 1000)).toLowerCase())) score -= 25;
+  return {
+    id: String(job.id || job.redirect_url || title + company), title, company, location, description,
+    url: job.redirect_url || job.url || "", posted: job.created || null, source: "Adzuna", sourceQuery: queryLabel,
+    matchScore: Math.max(0, Math.min(100, score)), matchedSkills,
+    salaryMin: job.salary_min || null, salaryMax: job.salary_max || null,
+    salaryNote: job.salary_min || job.salary_max ? "Verify salary amount and pay period on employer page." : "Salary not disclosed; confirm the role fits your ₹5–8 LPA target.",
+  };
 }
 
-// --- ROBUST AI AGENT (Simulation Mode) ---
-// This fixes the "401 Error" in the Chat
-async function runAI_Agent(userMessage) {
-    const lower = userMessage.toLowerCase();
+app.get("/health", async () => ({ ok: true, service: "ai-job-tracker-api", storage: "json-file" }));
+app.get("/profile", async () => ({
+  targetSalaryLpa: { min: 5, max: 8 },
+  targetLocations: ["Electronic City, Bengaluru", "Remote, India"],
+  dailyTarget: 15,
+  priorityRoles: ["Python backend", "Software engineering", "AI integration", "Automation"],
+  submissionMode: "review_only",
+}));
 
-    // Intent Detection (Simulated LangGraph)
-    if (lower.includes("remote") || lower.includes("wfh") || lower.includes("home")) {
-        return { type: "FILTER", keyword: "remote", reply: "I've filtered the feed to show Remote/Work-from-Home opportunities." };
-    }
-    if (lower.includes("java")) {
-        return { type: "FILTER", keyword: "java", reply: "I've filtered the list for Java Developer roles." };
-    }
-    if (lower.includes("python")) {
-        return { type: "FILTER", keyword: "python", reply: "Searching specifically for Python jobs." };
-    }
-    if (lower.includes("react") || lower.includes("frontend")) {
-        return { type: "FILTER", keyword: "react", reply: "Showing React.js and Frontend roles." };
-    }
-    if (lower.includes("resume") || lower.includes("upload")) {
-        return { type: "CHAT", reply: "Please upload your PDF resume using the green button above, and I'll match jobs to your skills!" };
-    }
-
-    // Default Reply
-    return { type: "CHAT", reply: "I can help you filter jobs. Try saying 'Show me Remote jobs' or 'Find Python roles'." };
-}
-
-// --- ROUTES ---
-
-// 1. GET /jobs - Fetches Real Adzuna Jobs & Applies Scores
-fastify.get("/jobs", async (req, reply) => {
-    if (cachedJobs.length === 0) {
-        try {
-            // Fetch Real Jobs
-            const response = await axios.get(
-                `https://api.adzuna.com/v1/api/jobs/in/search/1`,
-                { params: { app_id: ADZUNA_APP_ID, app_key: ADZUNA_APP_KEY, results_per_page: 20, what: "Software Developer", "content-type": "application/json" } }
-            );
-
-            cachedJobs = response.data.results.map(job => ({
-                id: job.id, title: job.title, company: job.company.display_name,
-                location: job.location.display_name, description: job.description,
-                url: job.redirect_url, posted: job.created, matchScore: null
-            }));
-        } catch (e) {
-            // Fallback if Adzuna fails
-            cachedJobs = [{ id: 999, title: "Backend Dev (Backup)", company: "Tech Inc", location: "Remote", description: "Node.js", matchScore: 80 }];
-        }
-    }
-
-    // Calculate Scores (Now 100% Safe)
-    const scoredJobs = await Promise.all(cachedJobs.map(async job => ({
-        ...job,
-        matchScore: userResumeText ? await getLangChainScore(job.description, userResumeText) : null
-    })));
-
-    // Sort: High Scores First
-    if (userResumeText) scoredJobs.sort((a, b) => b.matchScore - a.matchScore);
-
-    return scoredJobs;
+app.get("/jobs", async (request, reply) => {
+  const appId = process.env.ADZUNA_APP_ID;
+  const appKey = process.env.ADZUNA_APP_KEY;
+  if (!appId || !appKey) return reply.code(503).send({ error: "Job search is not configured. Add ADZUNA_APP_ID and ADZUNA_APP_KEY to backend environment variables. No sample jobs are returned." });
+  const queries = [
+    ["Python backend developer junior", "Bangalore", "Bengaluru Python/backend"],
+    ["software engineer graduate entry level", "Bangalore", "Bengaluru early-career software"],
+    ["AI integration automation engineer", "Bangalore", "Bengaluru AI/automation"],
+    ["remote Python backend developer", "India", "Remote Python/backend"],
+    ["remote AI automation integration engineer", "India", "Remote AI/automation"],
+  ];
+  const results = await Promise.allSettled(queries.map(async ([what, where, label]) => {
+    const response = await axios.get("https://api.adzuna.com/v1/api/jobs/in/search/1", {
+      timeout: 12000,
+      params: { app_id: appId, app_key: appKey, results_per_page: 20, what, where, "content-type": "application/json", sort_by: "date" },
+    });
+    return (response.data.results || []).map(job => jobShape(job, label));
+  }));
+  const found = results.filter(r => r.status === "fulfilled").flatMap(r => r.value);
+  if (!found.length) return reply.code(502).send({ error: "Job provider did not return results. Check credentials or retry later." });
+  const unique = [];
+  const seen = new Set();
+  for (const job of found) {
+    const key = String(job.url || (job.title + "|" + job.company)).split("#")[0].split("?")[0].replace(/\/$/, "").toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key); unique.push(job);
+  }
+  unique.sort((a, b) => b.matchScore - a.matchScore || String(b.posted || "").localeCompare(String(a.posted || "")));
+  return { jobs: unique, total: unique.length, dailyTarget: 15, note: "Match scores are keyword heuristics, not guarantees. Verify seniority, location and compensation on the employer page." };
 });
 
-// 2. POST /upload-resume - Parses PDF & Return Proper JSON
-fastify.post("/upload-resume", async (req, reply) => {
-    const data = await req.file();
-    if (!data) return { success: false, message: "No file uploaded" };
-
-    const buffer = await data.toBuffer();
-    const pdfData = await pdf(buffer);
-
-    userResumeText = pdfData.text; // Store text in memory
-
-    // CRITICAL: Return 'success: true' so the Frontend knows to refresh
-    return {
-        success: true,
-        message: "Resume analyzed! Jobs have been re-scored.",
-        matchCount: 5
-    };
+app.post("/upload-resume", async (request, reply) => {
+  const file = await request.file();
+  if (!file) return reply.code(400).send({ success: false, message: "Choose a PDF resume." });
+  if (!/\.pdf$/i.test(file.filename || "")) return reply.code(400).send({ success: false, message: "Only PDF resumes are supported." });
+  try {
+    const result = await pdf(await file.toBuffer());
+    const text = String(result.text || "").trim();
+    if (!text) return reply.code(422).send({ success: false, message: "No readable text was found in the PDF." });
+    return { success: true, message: "Resume parsed successfully for this request. Job matching still uses transparent role and skill heuristics.", characters: text.length };
+  } catch (error) {
+    request.log.error(error);
+    return reply.code(422).send({ success: false, message: "Could not parse this PDF. Export a text-based PDF and try again." });
+  }
 });
 
-// 3. POST /chat - AI Assistant
-fastify.post("/chat", async (req, reply) => {
-    const { message } = req.body;
-    const agentResponse = await runAI_Agent(message);
-    return {
-        success: true,
-        message: agentResponse.reply,
-        action: agentResponse.type === "FILTER" ? { type: "FILTER", keyword: agentResponse.keyword } : null
-    };
+app.get("/applications", async () => {
+  const applications = await store.all();
+  return { applications, total: applications.length };
 });
 
-const start = async () => {
-    try { await fastify.listen({ port: process.env.PORT || 3001, host: "0.0.0.0" }); console.log("Server Running"); }
-    catch (err) { process.exit(1); }
-};
-start();
+app.post("/applications", async (request, reply) => {
+  const body = request.body || {};
+  if (!body.title || !body.company || !body.url) return reply.code(400).send({ error: "Job title, company and URL are required." });
+  const applications = await store.all();
+  if (duplicateExists(applications, body)) return reply.code(409).send({ error: "Duplicate role already in your tracker." });
+  const application = {
+    id: randomUUID(), jobId: String(body.id || body.jobId || ""),
+    title: String(body.title).slice(0, 300), company: String(body.company).slice(0, 300),
+    location: String(body.location || "Not specified").slice(0, 300), url: String(body.url).slice(0, 2000),
+    source: String(body.source || "Manual").slice(0, 100),
+    matchScore: Number.isFinite(Number(body.matchScore)) ? Number(body.matchScore) : null,
+    salaryNote: String(body.salaryNote || "Verify compensation on employer site."),
+    status: "ready_for_review", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    appliedAt: null, notes: "",
+  };
+  applications.unshift(application);
+  await store.save(applications);
+  return reply.code(201).send({ application });
+});
+
+app.patch("/applications/:id", async (request, reply) => {
+  const body = request.body || {};
+  const check = validateStatus(body.status, body.confirmed === true);
+  if (!check.ok) return reply.code(400).send({ error: check.reason });
+  const applications = await store.all();
+  const index = applications.findIndex(item => item.id === request.params.id);
+  if (index < 0) return reply.code(404).send({ error: "Application not found." });
+  applications[index] = {
+    ...applications[index], status: body.status,
+    notes: body.notes === undefined ? applications[index].notes : String(body.notes).slice(0, 4000),
+    updatedAt: new Date().toISOString(),
+    appliedAt: body.status === "applied" ? (applications[index].appliedAt || new Date().toISOString()) : applications[index].appliedAt,
+  };
+  await store.save(applications);
+  return { application: applications[index] };
+});
+
+app.delete("/applications/:id", async (request, reply) => {
+  const applications = await store.all();
+  const next = applications.filter(item => item.id !== request.params.id);
+  if (next.length === applications.length) return reply.code(404).send({ error: "Application not found." });
+  await store.save(next);
+  return { success: true, total: next.length };
+});
+
+app.post("/application-answers", async request => {
+  return prepareAnswer(request.body?.question || "");
+});
+
+app.get("/application-statuses", async () => ({ statuses }));
+await app.listen({ port: Number(process.env.PORT || 3001), host: "0.0.0.0" });
