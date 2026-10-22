@@ -121,31 +121,40 @@ app.get("/jobs", async (request, reply) => {
     const fallbackQueries = [
       ["software developer", "Bengaluru", "Fallback Bengaluru software developer"],
       ["python developer", "Bengaluru", "Fallback Bengaluru Python developer"],
-      ["software engineer", "Bangalore", "Fallback Bangalore software engineer"],
-      ["backend developer", "Bangalore", "Fallback Bangalore backend developer"],
-      ["graduate software jobs", "India", "Fallback graduate software jobs"],
-      ["remote software developer", "India", "Fallback remote software developer"],
+      ["software engineer", "India", "Fallback India software engineer"],
     ];
-    const fallbackResults = await Promise.allSettled(fallbackQueries.map(async ([what, where, label]) => {
-      const response = await axios.get("https://api.adzuna.com/v1/api/jobs/in/search/1", {
-        timeout: 12000,
-        params: { app_id: appId, app_key: appKey, results_per_page: 30, what, where, "content-type": "application/json", sort_by: "date" },
-      });
-      const items = (response.data.results || []).map(job => jobShape(job, label));
-      request.log.info({ query: what, location: where, count: items.length }, "Adzuna fallback search completed");
-      return items;
-    }));
-    const fallbackSuccessful = fallbackResults.filter(r => r.status === "fulfilled");
-    jobsToFilter = fallbackSuccessful.flatMap(r => r.value);
+    // Run fallback calls sequentially to avoid bursts that can trigger provider throttling.
+    const fallbackErrors = [];
+    for (const [what, where, label] of fallbackQueries) {
+      try {
+        const response = await axios.get("https://api.adzuna.com/v1/api/jobs/in/search/1", {
+          timeout: 12000,
+          params: { app_id: appId, app_key: appKey, results_per_page: 20, what, where, "content-type": "application/json", sort_by: "date" },
+        });
+        const items = (response.data.results || []).map(job => jobShape(job, label));
+        request.log.info({ query: what, location: where, count: items.length }, "Adzuna fallback search completed");
+        jobsToFilter.push(...items);
+      } catch (error) {
+        const detail = {
+          query: what,
+          status: error?.response?.status || null,
+          code: error?.code || null,
+          message: error?.response?.data?.exception || error?.response?.data?.error || error?.message || "Unknown provider error",
+        };
+        fallbackErrors.push(detail);
+        request.log.warn({ provider: "Adzuna fallback", ...detail }, "Adzuna fallback search request failed");
+      }
+    }
     fallbackUsed = true;
-    for (const result of fallbackResults.filter(r => r.status === "rejected")) {
-      const error = result.reason;
-      request.log.warn({
-        provider: "Adzuna fallback",
-        status: error?.response?.status || null,
-        code: error?.code || null,
-        message: error?.response?.data?.exception || error?.response?.data?.error || error?.message || "Unknown provider error",
-      }, "Adzuna fallback search request failed");
+    if (!jobsToFilter.length && fallbackErrors.length === fallbackQueries.length) {
+      return reply.code(502).send({
+        error: "All broader Adzuna searches failed. Check the provider diagnostics below.",
+        failedRequests: fallbackErrors.length,
+        providerErrors: fallbackErrors,
+      });
+    }
+    if (!jobsToFilter.length) {
+      return { jobs: [], total: 0, dailyTarget: 15, fallbackUsed: true, note: "Adzuna returned no listings for the targeted or broader searches. Check the Adzuna account's country coverage and search quota, then retry." };
     }
     if (!fallbackSuccessful.length) {
       return reply.code(502).send({ error: "Adzuna searches failed. Check Render logs for provider details.", failedRequests: fallbackResults.length });
