@@ -25,6 +25,9 @@ export default function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [resumeMessage, setResumeMessage] = useState("");
+  const [answerQuestion, setAnswerQuestion] = useState("");
+  const [answerResult, setAnswerResult] = useState(null);
+  const [answerBusy, setAnswerBusy] = useState(false);
   const [tab, setTab] = useState("jobs");
 
   async function loadApplications() {
@@ -77,6 +80,17 @@ export default function App() {
       setNotice(status === "applied" ? "Marked as applied after your confirmation." : "Application status updated.");
     } catch (e) { setError(e.message); }
     finally { setBusy(""); }
+  }
+
+  async function draftAnswer(event) {
+    event.preventDefault();
+    if (!answerQuestion.trim()) return;
+    setAnswerBusy(true); setAnswerResult(null); setError("");
+    try {
+      const data = await request("/application-answers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: answerQuestion }) });
+      setAnswerResult(data);
+    } catch (e) { setError(e.message); }
+    finally { setAnswerBusy(false); }
   }
 
   async function uploadResume(event) {
@@ -164,7 +178,7 @@ export default function App() {
               <option value="all">All statuses</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
             </select>
           </div>
-          <div className="application-list">
+          <section className="answer-helper glass">\n            <h3>Application answer helper</h3>\n            <p>Draft from verified profile facts. Review and edit every answer before using it.</p>\n            <form className="answer-form" onSubmit={draftAnswer}>\n              <input value={answerQuestion} onChange={e => setAnswerQuestion(e.target.value)} placeholder="Paste an application question…" aria-label="Application question" />\n              <button className="primary-btn" disabled={answerBusy || !answerQuestion.trim()}>{answerBusy ? "Preparing…" : "Prepare answer"}</button>\n            </form>\n            {answerResult && <div className="answer-result"><strong>{answerResult.status === "draft" ? "Draft — review before using" : "Manual answer required"}</strong><p>{answerResult.answer || answerResult.reason}</p>{answerResult.reason && answerResult.answer && <small>{answerResult.reason}</small>}</div>}\n          </section>\n          <div className="application-list">
             {filteredApplications.map(app => <article className="application-row glass" key={app.id}>
               <div className="application-info"><h3>{app.title}</h3><p>{app.company} · {app.location}</p><small>Added {new Date(app.createdAt).toLocaleDateString()}</small>{app.url && <p><a href={app.url} target="_blank" rel="noreferrer">Open application page ↗</a></p>}</div>
               <div className="application-controls"><span className="status-pill">{STATUS_LABELS[app.status] || app.status}</span><label className="status-label">Update status<select value={app.status} disabled={busy === app.id} onChange={e => updateStatus(app, e.target.value)}>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select></label></div>
