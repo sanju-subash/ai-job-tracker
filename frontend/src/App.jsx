@@ -1,297 +1,202 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
-function App() {
-  // --- STATE MANAGEMENT ---
+const API = import.meta.env.VITE_API_URL || "https://ai-job-tracker-1-4sk5.onrender.com";
+const STATUSES = ["ready_for_review", "applied", "assessment", "interview", "rejected", "offer", "withdrawn", "follow_up"];
+const STATUS_LABELS = {
+  ready_for_review: "Ready for review", applied: "Applied", assessment: "Assessment",
+  interview: "Interview", rejected: "Rejected", offer: "Offer", withdrawn: "Withdrawn", follow_up: "Follow-up",
+};
+
+async function request(path, options = {}) {
+  const response = await fetch(API + path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || data.message || "Request failed");
+  return data;
+}
+
+export default function App() {
   const [jobs, setJobs] = useState([]);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
-  
-  // Track applied jobs in localStorage
-  const [appliedJobs, setAppliedJobs] = useState(() => {
-    const saved = localStorage.getItem("appliedJobs");
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [applications, setApplications] = useState([]);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [loadingJobs, setLoadingJobs] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [resumeMessage, setResumeMessage] = useState("");
+  const [answerQuestion, setAnswerQuestion] = useState("");
+  const [answerResult, setAnswerResult] = useState(null);
+  const [answerBusy, setAnswerBusy] = useState(false);
+  const [tab, setTab] = useState("jobs");
 
-  // Chat State
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatInput, setChatInput] = useState("");
-  const [chatHistory, setChatHistory] = useState([
-    { sender: "bot", text: "Hi! I can help you find jobs. Try saying 'Show me Remote jobs' or 'Find React roles'." }
-  ]);
-
-  // --- EFFECTS ---
-  useEffect(() => {
-    // Replace with your Render URL when deploying!
-    fetch("https://ai-job-tracker-1-4sk5.onrender.com/jobs")
-      .then((res) => res.json())
-      .then((data) => setJobs(data))
-      .catch((err) => console.error("Error fetching jobs:", err));
-  }, []);
-
-  // --- HANDLERS ---
-
-  // 1. Resume Upload Handler
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setIsUploading(true);
-    setUploadError(null);
-
-    const formData = new FormData();
-    formData.append("file", file);
-
+  async function loadApplications() {
+    const data = await request("/applications");
+    setApplications(data.applications || []);
+  }
+  async function loadJobs() {
+    setLoadingJobs(true); setError(""); setNotice("");
     try {
-      // Replace with your Render URL when deploying!
-      const response = await fetch("https://ai-job-tracker-1-4sk5.onrender.com/upload-resume", {
-        method: "POST",
-        body: formData,
-      });
+      const data = await request("/jobs");
+      setJobs(data.jobs || []);
+      setNotice(`Loaded ${(data.jobs || []).length} job listings. Check each employer page before applying.`);
+    } catch (e) { setError(e.message); }
+    finally { setLoadingJobs(false); }
+  }
+  useEffect(() => { loadApplications().catch(e => setError(e.message)); }, []);
 
-      const data = await response.json();
+  const trackedKeys = useMemo(() => new Set(applications.map(a => `${String(a.title).toLowerCase().trim()}|${String(a.company).toLowerCase().trim()}`)), [applications]);
+  const filteredJobs = jobs.filter(job => {
+    const term = search.toLowerCase();
+    return [job.title, job.company, job.location, job.description].some(x => String(x || "").toLowerCase().includes(term));
+  });
+  const filteredApplications = applications.filter(a => statusFilter === "all" || a.status === statusFilter);
 
-      if (data.success) {
-        setJobs(data.jobs); // Update jobs with new AI scores
-        alert("Resume analyzed! We've found your best matches.");
-      } else {
-        setUploadError("Failed to analyze resume.");
-      }
-    } catch (err) {
-      console.error(err);
-      setUploadError("Server error. Is the backend running?");
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  // 2. Apply Handler
-  function handleApply(job) {
-    if (appliedJobs.some((aj) => aj.id === job.id)) return;
-
-    // Open external link logic (Mock)
-    // window.open(job.applyLink, "_blank"); 
-
-    const confirm = window.confirm(`Did you apply for ${job.title} at ${job.company}?`);
-    if (!confirm) return;
-
-    const updated = [
-      { ...job, date: new Date().toLocaleDateString() },
-      ...appliedJobs,
-    ];
-    setAppliedJobs(updated);
-    localStorage.setItem("appliedJobs", JSON.stringify(updated));
+  async function saveForReview(job) {
+    setBusy(job.id); setError(""); setNotice("");
+    try {
+      await request("/applications", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(job) });
+      await loadApplications();
+      setNotice("Added to your review queue. No application was submitted.");
+    } catch (e) {
+      if (e.message.includes("Duplicate")) setNotice("This job appears to be tracked already.");
+      else setError(e.message);
+    } finally { setBusy(""); }
   }
 
-  // 3. Chat Handler
-  const handleChatSubmit = async (e) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
-
-    const userMsg = chatInput;
-    setChatHistory((prev) => [...prev, { sender: "user", text: userMsg }]);
-    setChatInput("");
-
+  async function updateStatus(app, status) {
+    setBusy(app.id); setError(""); setNotice("");
     try {
-      // Replace with your Render URL when deploying!
-      const res = await fetch("https://ai-job-tracker-1-4sk5.onrender.com/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMsg }),
-      });
-      const data = await res.json();
-
-      if (data.action) {
-        if (data.action.role) setSearchTerm(data.action.role);
-        if (data.action.location) setSearchTerm(data.action.location);
-        setChatHistory((prev) => [...prev, { sender: "bot", text: data.message }]);
-      } else {
-        setChatHistory((prev) => [...prev, { sender: "bot", text: data.message }]);
+      let confirmed = false;
+      if (status === "applied") {
+        confirmed = window.confirm(`Did you personally submit the application for "${app.title}" at ${app.company} on the employer's website?`);
+        if (!confirmed) return;
       }
-    } catch (err) {
-      setChatHistory((prev) => [
-        ...prev, 
-        { sender: "bot", text: "Sorry, I can't connect to the server right now." }
-      ]);
-    }
-  };
+      await request(`/applications/${encodeURIComponent(app.id)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, confirmed }),
+      });
+      await loadApplications();
+      setNotice(status === "applied" ? "Marked as applied after your confirmation." : "Application status updated.");
+    } catch (e) { setError(e.message); }
+    finally { setBusy(""); }
+  }
 
-  // --- FILTERING LOGIC ---
-  const filteredJobs = jobs.filter((job) =>
-    job.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    job.location.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  async function draftAnswer(event) {
+    event.preventDefault();
+    if (!answerQuestion.trim()) return;
+    setAnswerBusy(true); setAnswerResult(null); setError("");
+    try {
+      const data = await request("/application-answers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: answerQuestion }) });
+      setAnswerResult(data);
+    } catch (e) { setError(e.message); }
+    finally { setAnswerBusy(false); }
+  }
 
-  // Split into "Best Matches" (Score > 70) and Others
-  const bestMatches = filteredJobs.filter(job => job.matchScore >= 70);
-  const otherJobs = filteredJobs.filter(job => !job.matchScore || job.matchScore < 70);
+  async function uploadResume(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const form = new FormData(); form.append("file", file);
+    setResumeMessage("Reading resume…"); setError("");
+    try {
+      const data = await request("/upload-resume", { method: "POST", body: form });
+      setResumeMessage(data.message || "Resume processed.");
+    } catch (e) { setError(e.message); setResumeMessage(""); }
+    event.target.value = "";
+  }
+
+  const countByStatus = (status) => applications.filter(a => a.status === status).length;
 
   return (
-    <div className="page">
+    <main className="page">
       <div className="container">
-        
-        {/* --- HEADER --- */}
         <header className="header glass">
           <div className="header-info">
-            <h2>AI Job Tracker</h2>
-            <p>Upload your resume to unlock AI-powered matching</p>
+            <p className="eyebrow">PERSONAL CAREER WORKSPACE</p>
+            <h1>AI Job Tracker</h1>
+            <p>Find relevant jobs. Review every application. Keep your history in one place.</p>
           </div>
-          
           <div className="header-actions">
-            {/* RESUME UPLOAD BUTTON */}
-            <div className="upload-wrapper">
-              <label htmlFor="resume-upload" className="upload-btn">
-                {isUploading ? "Analyzing..." : "📄 Upload Resume"}
-              </label>
-              <input 
-                id="resume-upload" 
-                type="file" 
-                accept=".pdf" 
-                onChange={handleFileUpload} 
-                hidden 
-              />
-            </div>
-
-            <div className="search-box">
-              <input
-                type="text"
-                placeholder="Search jobs..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
+            <label className="upload-btn">Upload resume<input type="file" accept=".pdf" onChange={uploadResume} hidden /></label>
+            <button className="primary-btn" onClick={loadJobs} disabled={loadingJobs}>{loadingJobs ? "Searching…" : "Find jobs"}</button>
           </div>
         </header>
 
-        {/* --- BEST MATCHES SECTION --- */}
-        {bestMatches.length > 0 && (
-          <section className="section-block">
-            <div className="section-title">
-              <h3>✨ Best Matches for You</h3>
-            </div>
-            <div className="grid-container">
-              {bestMatches.map((job) => (
-                <JobCard 
-                  key={job.id} 
-                  job={job} 
-                  appliedJobs={appliedJobs} 
-                  onApply={handleApply} 
-                  isBestMatch={true}
-                />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* --- OTHER LISTINGS --- */}
-        <section className="section-block">
-          <div className="section-title">
-            <h3>{bestMatches.length > 0 ? "Other Opportunities" : "Available Listings"}</h3>
-            <span className="count-badge">{filteredJobs.length}</span>
-          </div>
-          <div className="grid-container">
-            {otherJobs.length > 0 ? (
-              otherJobs.map((job) => (
-                <JobCard 
-                  key={job.id} 
-                  job={job} 
-                  appliedJobs={appliedJobs} 
-                  onApply={handleApply} 
-                />
-              ))
-            ) : (
-              <p style={{color: '#64748b'}}>No jobs found. Try adjusting filters or uploading a resume.</p>
-            )}
-          </div>
+        <section className="settings-strip glass">
+          <div><span>Salary target</span><strong>₹5–8 LPA</strong></div>
+          <div><span>Locations</span><strong>Electronic City · Remote India</strong></div>
+          <div><span>Daily shortlist goal</span><strong>15 opportunities</strong></div>
+          <div><span>Submission mode</span><strong>Review first</strong></div>
         </section>
 
-        {/* --- RECENT APPLICATIONS --- */}
-        {appliedJobs.length > 0 && (
-          <section className="section-block">
-            <div className="section-title">
-              <h3>Recent Applications</h3>
-            </div>
-            <div className="grid-container">
-              {appliedJobs.map((job, i) => (
-                <div className="applied-card glass" key={i}>
-                  <div className="applied-header">
-                    <strong>{job.title}</strong>
-                    <span className="status-label">APPLIED</span>
-                  </div>
-                  <div className="applied-meta">{job.company}</div>
-                  <div className="applied-footer">Applied on: {job.date}</div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+        {error && <div className="notice error" role="alert">{error}</div>}
+        {notice && <div className="notice" role="status">{notice}</div>}
+        {resumeMessage && <div className="notice" role="status">{resumeMessage}</div>}
 
-      </div> {/* End of Container */}
+        <section className="stats">
+          <div className="stat glass"><span>In review queue</span><strong>{countByStatus("ready_for_review")}</strong></div>
+          <div className="stat glass"><span>Applied</span><strong>{countByStatus("applied")}</strong></div>
+          <div className="stat glass"><span>Interviews</span><strong>{countByStatus("interview")}</strong></div>
+          <div className="stat glass"><span>Offers</span><strong>{countByStatus("offer")}</strong></div>
+        </section>
 
-      {/* --- FIXED CHAT WIDGET --- */}
-      <div className={`chat-widget ${chatOpen ? "open" : ""}`}>
-        {!chatOpen && (
-          <button className="chat-toggle" onClick={() => setChatOpen(true)}>
-            💬 AI Assistant
-          </button>
-        )}
+        <nav className="tabs" aria-label="Workspace views">
+          <button className={tab === "jobs" ? "active" : ""} onClick={() => setTab("jobs")}>Discover jobs</button>
+          <button className={tab === "applications" ? "active" : ""} onClick={() => setTab("applications")}>My applications ({applications.length})</button>
+        </nav>
 
-        {chatOpen && (
-          <div className="chat-window glass">
-            <div className="chat-header">
-              <span>🤖 AI Assistant</span>
-              <button onClick={() => setChatOpen(false)}>✕</button>
-            </div>
-            
-            <div className="chat-messages">
-              {chatHistory.map((msg, i) => (
-                <div key={i} className={`message ${msg.sender}`}>
-                  {msg.text}
-                </div>
-              ))}
-            </div>
-
-            <form className="chat-input-area" onSubmit={handleChatSubmit}>
-              <input 
-                type="text" 
-                placeholder="Ask me to filter jobs..." 
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-              />
-              <button type="submit">➤</button>
-            </form>
+        {tab === "jobs" && <>
+          <div className="section-heading">
+            <div><h2>Relevant opportunities</h2><p>Python backend · Software engineering · AI integration · Automation</p></div>
+            <input className="search-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search title, company, skills…" aria-label="Search jobs" />
           </div>
-        )}
-      </div>
+          {!jobs.length && <div className="empty glass"><h3>Ready to find your next role?</h3><p>Connect the job provider credentials to the backend, then search for fresh listings. This app does not create fake fallback jobs.</p><button className="primary-btn" onClick={loadJobs} disabled={loadingJobs}>{loadingJobs ? "Searching…" : "Search jobs"}</button></div>}
+          <div className="grid-container">
+            {filteredJobs.map(job => {
+              const key = `${String(job.title).toLowerCase().trim()}|${String(job.company).toLowerCase().trim()}`;
+              const tracked = trackedKeys.has(key);
+              return <article className="job-card glass" key={job.id}>
+                <div className="card-top"><span className="match-tag">{job.matchScore ?? "—"}% keyword fit</span><span className="source-tag">{job.source || "Job board"}</span></div>
+                <h3>{job.title}</h3><p className="company">{job.company}</p>
+                <p className="location">⌖ {job.location}</p>
+                <p className="description">{String(job.description || "").slice(0, 240)}{String(job.description || "").length > 240 ? "…" : ""}</p>
+                <p className="salary-note">{job.salaryNote || "Confirm salary and pay period on employer page."}</p>
+                <div className="card-actions">
+                  {job.url && <a className="secondary-btn" href={job.url} target="_blank" rel="noreferrer">View employer listing ↗</a>}
+                  <button className="primary-btn" disabled={tracked || busy === job.id} onClick={() => saveForReview(job)}>{tracked ? "Already tracked" : busy === job.id ? "Saving…" : "Add to review queue"}</button>
+                </div>
+              </article>;
+            })}
+          </div>
+          {jobs.length > 0 && filteredJobs.length === 0 && <p className="empty-text">No matching jobs. Try a broader search.</p>}
+        </>}
 
-    </div>
+        {tab === "applications" && <>
+          <div className="section-heading">
+            <div><h2>Application tracker</h2><p>Only mark a role as applied after you submit it yourself.</p></div>
+            <select className="search-input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter by status">
+              <option value="all">All statuses</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+            </select>
+          </div>
+          <section className="answer-helper glass">
+            <h3>Application answer helper</h3>
+            <p>Draft from verified profile facts. Review and edit every answer before using it.</p>
+            <form className="answer-form" onSubmit={draftAnswer}>
+              <input value={answerQuestion} onChange={e => setAnswerQuestion(e.target.value)} placeholder="Paste an application question…" aria-label="Application question" />
+              <button className="primary-btn" disabled={answerBusy || !answerQuestion.trim()}>{answerBusy ? "Preparing…" : "Prepare answer"}</button>
+            </form>
+            {answerResult && <div className="answer-result"><strong>{answerResult.status === "draft" ? "Draft — review before using" : "Manual answer required"}</strong><p>{answerResult.answer || answerResult.reason}</p>{answerResult.reason && answerResult.answer && <small>{answerResult.reason}</small>}</div>}
+          </section>
+          <div className="application-list">
+            {filteredApplications.map(app => <article className="application-row glass" key={app.id}>
+              <div className="application-info"><h3>{app.title}</h3><p>{app.company} · {app.location}</p><small>Added {new Date(app.createdAt).toLocaleDateString()}</small>{app.url && <p><a href={app.url} target="_blank" rel="noreferrer">Open application page ↗</a></p>}</div>
+              <div className="application-controls"><span className="status-pill">{STATUS_LABELS[app.status] || app.status}</span><label className="status-label">Update status<select value={app.status} disabled={busy === app.id} onChange={e => updateStatus(app, e.target.value)}>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select></label></div>
+            </article>)}
+            {!filteredApplications.length && <div className="empty glass"><h3>No applications here yet</h3><p>Find jobs and add relevant ones to your review queue. You remain in control of every submission.</p><button className="primary-btn" onClick={() => setTab("jobs")}>Discover jobs</button></div>}
+          </div>
+        </>}
+        <footer><span>Review-first workflow</span><span>Match scores are estimates, not guarantees. Always verify details on the employer site.</span></footer>
+      </div>
+    </main>
   );
 }
-
-// Sub-component for cleaner code
-function JobCard({ job, appliedJobs, onApply, isBestMatch }) {
-  const isApplied = appliedJobs.some((aj) => aj.id === job.id);
-  
-  return (
-    <div className={`job-card glass ${isBestMatch ? "highlight-card" : ""}`}>
-      <div className={`match-tag ${job.matchScore >= 70 ? "high" : "med"}`}>
-        {job.matchScore || 50}% Match
-      </div>
-      <h4>{job.title}</h4>
-      <div className="card-meta">
-        <span>🏢 {job.company}</span>
-        <span>📍 {job.location}</span>
-      </div>
-      <button
-        className={`btn-apply ${isApplied ? "is-applied" : ""}`}
-        disabled={isApplied}
-        onClick={() => onApply(job)}
-      >
-        {isApplied ? "Applied ✓" : "Apply Now"}
-      </button>
-    </div>
-  );
-}
-
-export default App;
