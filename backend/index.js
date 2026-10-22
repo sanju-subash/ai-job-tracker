@@ -5,6 +5,8 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { createApplicationStore } from "./application-store.js";
 import { duplicateExists, validateStatus } from "./workflow-helpers.js";
 import { prepareAnswer } from "./application-answers.js";
@@ -15,6 +17,10 @@ const pdf = require("pdf-parse");
 const app = Fastify({ logger: true });
 const store = createApplicationStore();
 const statuses = ["saved", "ready_for_review", "applied", "assessment", "interview", "rejected", "offer", "withdrawn", "follow_up"];
+const dataDir = process.env.DATA_DIR || path.join(process.cwd(), "data");
+const resumePath = path.join(dataDir, "resume.txt");
+let resumeText = "";
+try { resumeText = await readFile(resumePath, "utf8"); } catch { /* no resume uploaded yet */ }
 
 await app.register(cors, {
   origin: process.env.ALLOWED_ORIGIN ? process.env.ALLOWED_ORIGIN.split(",").map(s => s.trim()) : true,
@@ -29,16 +35,18 @@ function jobShape(job, queryLabel) {
   const text = (title + " " + description).toLowerCase();
   const skills = ["python", "fastapi", "flask", "mongodb", "postgresql", "react", "n8n", "vapi", "gemini", "webhook", "api integration"];
   const matchedSkills = skills.filter(skill => text.includes(skill));
+  const resumeTerms = resumeText.toLowerCase().split(/[^a-z0-9+#.]+/).filter(term => term.length >= 4);
+  const resumeMatches = [...new Set(resumeTerms)].filter(term => text.includes(term)).slice(0, 12);
   const titleTerms = ["python", "backend", "software engineer", "software developer", "ai engineer", "automation", "integration"];
   const roleHits = titleTerms.filter(term => title.toLowerCase().includes(term));
-  let score = Math.min(40, matchedSkills.length * 6) + Math.min(35, roleHits.length * 12);
+  let score = Math.min(30, matchedSkills.length * 5) + Math.min(35, roleHits.length * 12) + Math.min(20, resumeMatches.length * 2);
   if (/junior|entry.level|graduate|fresher|associate|trainee|early career|0.?1 year/.test(text)) score += 15;
   if (/remote|work from home|wfh/.test((location + " " + description).toLowerCase())) score += 10;
   if (/senior|staff engineer|principal|lead engineer|manager|director|5\+ years|7\+ years/.test((title + " " + description.slice(0, 1000)).toLowerCase())) score -= 25;
   return {
     id: String(job.id || job.redirect_url || title + company), title, company, location, description,
     url: job.redirect_url || job.url || "", posted: job.created || null, source: "Adzuna", sourceQuery: queryLabel,
-    matchScore: Math.max(0, Math.min(100, score)), matchedSkills,
+    matchScore: Math.max(0, Math.min(100, score)), matchedSkills, resumeMatches,
     salaryMin: job.salary_min || null, salaryMax: job.salary_max || null,
     salaryNote: job.salary_min || job.salary_max ? "Verify salary amount and pay period on employer page." : "Salary not disclosed; confirm the role fits your ₹5–8 LPA target.",
   };
@@ -92,7 +100,10 @@ app.post("/upload-resume", async (request, reply) => {
     const result = await pdf(await file.toBuffer());
     const text = String(result.text || "").trim();
     if (!text) return reply.code(422).send({ success: false, message: "No readable text was found in the PDF." });
-    return { success: true, message: "Resume parsed successfully for this request. Job matching still uses transparent role and skill heuristics.", characters: text.length };
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(resumePath, text, "utf8");
+    resumeText = text;
+    return { success: true, message: "Resume saved locally and will influence future job match scores.", characters: text.length };
   } catch (error) {
     request.log.error(error);
     return reply.code(422).send({ success: false, message: "Could not parse this PDF. Export a text-based PDF and try again." });
