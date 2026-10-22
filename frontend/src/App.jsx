@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const API = import.meta.env.VITE_API_URL || "https://ai-job-tracker-1-4sk5.onrender.com";
 const STATUSES = ["ready_for_review", "applied", "assessment", "interview", "rejected", "offer", "withdrawn", "follow_up"];
 const STATUS_LABELS = {
   ready_for_review: "Ready for review", applied: "Applied", assessment: "Assessment",
