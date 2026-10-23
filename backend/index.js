@@ -89,29 +89,36 @@ app.get("/jobs", async (request, reply) => {
     ["remote junior python developer fresher", "India", "Remote junior Python"],
     ["remote entry level software engineer", "India", "Remote entry-level software"],
   ];
-  const results = await Promise.allSettled(queries.map(async ([what, where, label]) => {
-    const response = await axios.get("https://api.adzuna.com/v1/api/jobs/in/search/1", {
-      timeout: 12000,
-      params: { app_id: appId, app_key: appKey, results_per_page: 20, what, where, "content-type": "application/json", sort_by: "date" },
-    });
-    return (response.data.results || []).map(job => jobShape(job, label));
-  }));
-  const failed = results.filter(r => r.status === "rejected");
-  for (const result of failed) {
-    const error = result.reason;
-    request.log.warn({
-      provider: "Adzuna",
-      status: error?.response?.status || null,
-      code: error?.code || null,
-      message: error?.response?.data?.exception || error?.response?.data?.error || error?.message || "Unknown provider error",
-    }, "Adzuna search request failed");
+  const providerJobs = [];
+  const failed = [];
+  let successfulCount = 0;
+  // Run provider requests one at a time to avoid triggering rate limits with a burst.
+  for (const [what, where, label] of queries) {
+    try {
+      const response = await axios.get("https://api.adzuna.com/v1/api/jobs/in/search/1", {
+        timeout: 12000,
+        params: { app_id: appId, app_key: appKey, results_per_page: 20, what, where, "content-type": "application/json", sort_by: "date" },
+      });
+      const items = (response.data.results || []).map(job => jobShape(job, label));
+      providerJobs.push(...items);
+      successfulCount += 1;
+      request.log.info({ query: what, location: where, count: items.length }, "Adzuna primary search completed");
+    } catch (error) {
+      const detail = {
+        query: what,
+        status: error?.response?.status || null,
+        code: error?.code || null,
+        message: error?.response?.data?.exception || error?.response?.data?.error || error?.message || "Unknown provider error",
+      };
+      failed.push(detail);
+      request.log.warn({ provider: "Adzuna", ...detail }, "Adzuna search request failed");
+    }
   }
-  const successful = results.filter(r => r.status === "fulfilled");
-  const providerJobs = successful.flatMap(r => r.value);
-  if (!successful.length) {
+  if (successfulCount === 0) {
     return reply.code(502).send({
-      error: "All job-provider requests failed. Check the Adzuna credentials and API quota in Render logs.",
+      error: "All job-provider requests failed. Check the provider error details and Adzuna credentials/quota.",
       failedRequests: failed.length,
+      providerErrors: failed,
     });
   }
   let jobsToFilter = providerJobs;
