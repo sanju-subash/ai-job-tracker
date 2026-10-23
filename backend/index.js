@@ -156,12 +156,6 @@ app.get("/jobs", async (request, reply) => {
     if (!jobsToFilter.length) {
       return { jobs: [], total: 0, dailyTarget: 15, fallbackUsed: true, note: "Adzuna returned no listings for the targeted or broader searches. Check the Adzuna account's country coverage and search quota, then retry." };
     }
-    if (!fallbackSuccessful.length) {
-      return reply.code(502).send({ error: "Adzuna searches failed. Check Render logs for provider details.", failedRequests: fallbackResults.length });
-    }
-    if (!jobsToFilter.length) {
-      return { jobs: [], total: 0, dailyTarget: 15, note: "Adzuna returned no listings for the targeted or broader searches. Check the Adzuna account's country coverage and search quota, then retry." };
-    }
   }
   const found = jobsToFilter.filter(job => job.targetRole && !job.seniorRole);
   if (!found.length) return { jobs: [], total: 0, dailyTarget: 15, note: "No clearly relevant early-career target roles were found in this provider batch. Try again later; senior/leadership and unrelated roles are intentionally excluded." };
