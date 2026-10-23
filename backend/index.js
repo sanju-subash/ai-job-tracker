@@ -46,11 +46,17 @@ function jobShape(job, queryLabel) {
     { label: "Data", re: /data analyst|junior data scientist|data engineer/ },
   ];
   const roleHits = roleGroups.filter(group => group.re.test(titleLower));
-  const earlyCareer = /junior|entry.level|graduate|fresher|associate|trainee|early career|intern|new grad|0.?1 year|1.?2 years/.test(text);
+  const earlyCareer = /junior|entry.level|graduate|fresher|associate|trainee|early career|intern|new grad|0.?1 year|1.?2 years|0\s*(?:-|to)\s*2\s*(?:years?|yrs?)/.test(text);
+  const experienceStarts = [
+    ...text.matchAll(/\b(\d{1,2})\s*(?:\+|–|-|to)\s*(\d{1,2})?\s*(?:years?|yrs?)\b/g),
+    ...text.matchAll(/\b(\d{1,2})\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp)\b/g),
+  ].map(match => Number(match[1])).filter(Number.isFinite);
   const seniorRole = /\b(senior|sr\.?|staff|principal|lead|manager|director|architect|head of)\b/.test(titleLower)
-    || /\b(5\+|6\+|7\+|8\+|10\+)\s*years?/.test(text);
+    || (experienceStarts.length > 0 && Math.min(...experienceStarts) >= 3);
   const targetRole = roleHits.length > 0;
   const remote = /remote|work from home|\bwfh\b/.test((location + " " + description).toLowerCase());
+  const locationEligible = /bengaluru|bangalore/i.test(location)
+    || (/^(remote|india)$/i.test(location.trim()) && remote);
   let score = (targetRole ? 25 : 0)
     + Math.min(30, matchedSkills.length * 5)
     + Math.min(20, resumeMatches.length * 2)
@@ -61,7 +67,7 @@ function jobShape(job, queryLabel) {
   return {
     id: String(job.id || job.redirect_url || title + company), title, company, location, description,
     url: job.redirect_url || job.url || "", posted: job.created || null, source: "Adzuna", sourceQuery: queryLabel,
-    targetRole, roleCategories: roleHits.map(group => group.label), earlyCareer, seniorRole, remote,
+    targetRole, roleCategories: roleHits.map(group => group.label), earlyCareer, seniorRole, remote, locationEligible,
     matchScore: Math.max(0, Math.min(100, score)), matchedSkills, resumeMatches,
     salaryMin: job.salary_min || null, salaryMax: job.salary_max || null,
     salaryNote: job.salary_min || job.salary_max ? "Verify salary amount and pay period on employer page." : "Salary not disclosed; confirm the role fits your ₹5–8 LPA target.",
@@ -164,8 +170,8 @@ app.get("/jobs", async (request, reply) => {
       return { jobs: [], total: 0, dailyTarget: 15, fallbackUsed: true, note: "Adzuna returned no listings for the targeted or broader searches. Check the Adzuna account's country coverage and search quota, then retry." };
     }
   }
-  const found = jobsToFilter.filter(job => job.targetRole && !job.seniorRole);
-  if (!found.length) return { jobs: [], total: 0, dailyTarget: 15, note: "No clearly relevant early-career target roles were found in this provider batch. Try again later; senior/leadership and unrelated roles are intentionally excluded." };
+  const found = jobsToFilter.filter(job => job.targetRole && !job.seniorRole && job.locationEligible);
+  if (!found.length) return { jobs: [], total: 0, dailyTarget: 15, fallbackUsed, note: "No suitable Bengaluru/remote-India target roles were found. Roles with clear senior experience requirements and unrelated locations are excluded." };
   const unique = [];
   const seen = new Set();
   for (const job of found) {
